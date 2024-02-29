@@ -1,4 +1,4 @@
-module mongo-password-rotator
+module github.com/joaquinrz/mongo-password-rotator
 
 go 1.21.4
 
