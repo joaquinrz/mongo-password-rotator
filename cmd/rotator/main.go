@@ -1,69 +1,89 @@
 package main
 
 import (
-    "context"
-    "fmt"
-    "os"
-    "time"
+	"context"
+	"log"
+	"path/filepath"
+	"time"
 
-    "github.com/fsnotify/fsnotify"
+	"github.com/fsnotify/fsnotify"
 	"github.com/joaquinrz/mongo-password-rotator/internal/config"
-    "github.com/joaquinrz/mongo-password-rotator/internal/logger"
 	"github.com/joaquinrz/mongo-password-rotator/internal/mongodb"
-    "go.mongodb.org/mongo-driver/mongo"
 )
 
 func main() {
-    // Load and validate configuration
-    cfg, err := config.LoadConfig()
-    if err != nil {
-        logger.Fatal("Failed to load configuration:", err)
-    }
+	log.Println("Starting MongoDB password rotator.")
 
-    // Initialize MongoDB client
-    mongoClient, err := mongodb.NewClient(cfg.MongoDBURI, cfg.MongoDBUsername, cfg.MongoDBPassword)
-    if err != nil {
-        logger.Fatal("Failed to initialize MongoDB client:", err)
-    }
-    defer mongoClient.Disconnect(context.Background())
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 
-    // Start watching the password file for changes
-    watcher, err := fsnotify.NewWatcher()
-    if err != nil {
-        logger.Fatal("Error creating file watcher:", err)
-    }
-    defer watcher.Close()
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatalf("Failed to create file watcher: %v", err)
+	}
+	defer watcher.Close()
 
-    done := make(chan bool)
-    go func() {
-        for {
-            select {
-            case event := <-watcher.Events:
-                if event.Op&fsnotify.Write == fsnotify.Write {
-                    logger.Info("Detected change in password file")
-                    newPassword, err := os.ReadFile(cfg.PasswordFilePath)
-                    if err != nil {
-                        logger.Error("Failed to read new password from file:", err)
-                        continue
-                    }
+	err = watcher.Add(filepath.Dir(cfg.NewPasswordFilePath))
+	if err != nil {
+		log.Fatalf("Failed to watch the directory for password file changes: %v", err)
+	}
 
-                    if err := mongoClient.UpdatePassword(string(newPassword)); err != nil {
-                        logger.Error("Failed to update MongoDB password:", err)
-                    } else {
-                        logger.Info("MongoDB password updated successfully")
-                    }
-                }
-            case err := <-watcher.Errors:
-                logger.Error("Watcher error:", err)
-            }
-        }
-    }()
+	log.Println("Monitoring for password changes...")
 
-    err = watcher.Add(cfg.PasswordFilePath)
-    if err != nil {
-        logger.Fatal("Failed to add password file to watcher:", err)
-    }
+	listenForEvents(watcher, cfg)
 
-    // Block the main goroutine until the application is terminated
-    <-done
+	// Block main goroutine indefinitely.
+	select {}
+}
+
+func listenForEvents(watcher *fsnotify.Watcher, cfg *config.Config) {
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return // Exit if the channel is closed.
+				}
+				handleEvent(event, cfg)
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return // Exit if the channel is closed.
+				}
+				log.Printf("Watcher error: %v", err)
+			}
+		}
+	}()
+}
+
+func handleEvent(event fsnotify.Event, cfg *config.Config) {
+	// Check if the event is related to the NewPasswordFilePath.
+	if filepath.Clean(event.Name) == filepath.Clean(cfg.NewPasswordFilePath) {
+		switch {
+		case event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create:
+			log.Printf("Detected change in password file: %s", event.Name)
+			updateMongoDBPassword(cfg)
+		case event.Op&fsnotify.Remove == fsnotify.Remove:
+			log.Printf("Password file was deleted: %s", event.Name)
+		}
+	}
+}
+
+func updateMongoDBPassword(cfg *config.Config) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	mongoClient, err := mongodb.NewClient(ctx, cfg)
+	if err != nil {
+		log.Printf("Failed to initialize MongoDB client: %v", err)
+		return
+	}
+	defer mongoClient.Disconnect(ctx)
+
+	if err := mongoClient.UpdatePassword(ctx, cfg); err != nil {
+		log.Printf("Failed to update MongoDB password: %v", err)
+	} else {
+		log.Println("MongoDB password updated successfully.")
+	}
 }
