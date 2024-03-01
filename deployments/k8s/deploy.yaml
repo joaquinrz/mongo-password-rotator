@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-password-rotator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongo-password-rotator
+  template:
+    metadata:
+      labels:
+        app: mongo-password-rotator
+    spec:
+      securityContext:
+        fsGroup: 472
+        supplementalGroups:
+          - 0
+      containers:
+        - name: mongo-password-rotator
+          image: ghcr.io/joaquinrz/mongo-password-rotator:latest
+          imagePullPolicy: Always
+          env:
+            - name: MONGODB_CONNECTION_STRING
+              value: "mongodb://my-mongodb:27017"
+            - name: MONGODB_USERNAME
+              value: "admin"
+            - name: MONGODB_DBNAME
+              value: "admin"
+            - name: NEW_PASSWORD_FILE_PATH
+              value: "/app/password/new/mongodb-root-password-new"
+            - name: CURRENT_PASSWORD_FILE_PATH
+              value: "/app/password/current/mongodb-root-password-current"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "250m"
+            limits:
+              memory: "128Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: mongodb-root-password-new
+              mountPath: "/app/password/new"
+              readOnly: true
+            - name: mongodb-root-password-current
+              mountPath: "/app/password/current"
+              readOnly: true
+      volumes:
+        - name: mongodb-root-password-current
+          secret:
+            secretName: my-mongodb
+        - name: mongodb-root-password-new
+          secret:
+            secretName: my-mongodb-new           
