@@ -31,6 +31,22 @@ spec:
               value: "/app/password/new/mongodb-root-password-new"
             - name: CURRENT_PASSWORD_FILE_PATH
               value: "/app/password/current/mongodb-root-password-current"
+            - name: AZURE_TENANT_ID
+              value: "16b3c013-d300-468d-ac64-7eda0820b6d3"
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name:  azure-secret-sp
+                  key: ClientID
+            - name: AZURE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name:  azure-secret-sp
+                  key: ClientSecret
+            - name: KEYVAULT_NAME
+              value: "joaquin-kv"
+            - name: KEY_VAULT_CURRENT_SECRET_NAME
+              value: "mongodb-root-password-current"
           resources:
             requests:
               memory: "64Mi"

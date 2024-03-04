@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/joaquinrz/mongo-password-rotator/internal/keyvault"
 	"log"
 	"path/filepath"
 	"sync"
@@ -17,6 +18,7 @@ func main() {
 	log.Println("MongoDB password rotator started.")
 
 	cfg, err := config.LoadConfig()
+
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -56,7 +58,21 @@ func watchPasswordFileChanges(cfg *config.Config) error {
 				mu.Lock()
 				if time.Since(lastUpdate) > cooldownPeriod {
 					log.Println("Password file changed, updating MongoDB password...")
-					updateMongoDBPassword(cfg)
+
+					// Attempt to update MongoDB password and check for failure
+					if err := updateMongoDBPassword(cfg); err != nil {
+						log.Printf("Failed to update MongoDB password: %v", err)
+						continue // Skip to the next iteration of the loop
+					}
+
+					// If updateMongoDBPassword was successful, proceed to update Azure KeyVault secret
+					log.Println("MongoDB password updated successfully, updating Azure Key Vault secret...")
+					if err := keyvault.UpdateSecret(cfg); err != nil {
+						log.Fatalf("Failed to update Azure Key Vault secret: %v", err)
+					} else {
+						log.Println("Successfully updated Current Azure Key Vault secret with new MongoDB password.")
+					}
+
 					lastUpdate = time.Now()
 					log.Println("Waiting for Password file changes...")
 				}
@@ -72,20 +88,22 @@ func watchPasswordFileChanges(cfg *config.Config) error {
 	}
 }
 
-func updateMongoDBPassword(cfg *config.Config) {
+func updateMongoDBPassword(cfg *config.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	mongoClient, err := mongodb.NewClient(ctx, cfg)
 	if err != nil {
 		log.Printf("Failed to initialize MongoDB client: %v", err)
-		return
+		return err
 	}
 	defer mongoClient.Disconnect(ctx)
 
 	if err := mongoClient.UpdatePassword(ctx, cfg); err != nil {
 		log.Printf("Failed to update MongoDB password: %v", err)
-	} else {
-		log.Println("MongoDB password updated successfully.")
+		return err
 	}
+
+	log.Println("MongoDB password updated successfully.")
+	return nil
 }
